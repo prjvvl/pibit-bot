@@ -17,12 +17,20 @@ export class GeminiProvider implements AIProvider {
         try {
             const model = this.genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
             const prompt = generatePrompt(config.botName, platform, message, history, additionalData);
-
-            const res = await model.generateContent([{ text: prompt }]);
-
-            return res.response?.text?.() ?? FAILED_TO_GENERATE_RESPONSE_MESSAGE;
+            const timeoutMs = 4000;
+            const apiPromise = model.generateContent([{ text: prompt }]);
+            let res;
+            try {
+                res = await Promise.race([
+                    apiPromise,
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), timeoutMs))
+                ]);
+            } catch (timeoutErr) {
+                return 'Sorry, the Gemini AI service did not respond in time. Please try again later.';
+            }
+            const geminiRes = res as typeof model.generateContent extends (...args: any[]) => Promise<infer R> ? R : any;
+            return geminiRes.response?.text?.() ?? FAILED_TO_GENERATE_RESPONSE_MESSAGE;
         } catch (error) {
-            logger.error("Gemini API error:", error);
             return FAILED_TO_GENERATE_RESPONSE_MESSAGE;
         }
     }

@@ -4,11 +4,8 @@ import { SlackPlatform } from './platform/slack.js';
 dotenv.config();
 
 
-const init = async () => {
-    verifyEnvVariables();
-    const slack = new SlackPlatform();
-    slack.listen();
-    // slack.sendMessage('C09BKJNGA3H', 'Hello World!');
-}
+verifyEnvVariables();
+const slack = new SlackPlatform();
+slack.registerEvents();
 
-init();
+export default slack.getRequestHandler();

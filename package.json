@@ -6,9 +6,10 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "npx tsc",
+    "vercel-build": "tsc",
     "start": "node dist/index.js",
     "dev": "node --loader ts-node/esm --trace-warnings --trace-uncaught src/index.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "vercel dev"
   },
   "keywords": [],
   "author": "Prajwal Jadhav",

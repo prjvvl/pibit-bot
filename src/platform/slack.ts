@@ -1,4 +1,4 @@
-import bolt from '@slack/bolt'
+import bolt from "@slack/bolt";
 import { config } from "../config.js";
 import { logger } from "../services/logger.js";
 import type { Platform } from "../core/platform/platformInterface.js";
@@ -9,25 +9,31 @@ import { LRUCache } from '../services/database/cache.js';
 export class SlackPlatform implements Platform {
     
     private app: bolt.App;
+    private receiver: bolt.ExpressReceiver;
     private ai: AIProvider;
     private db: LRUCache;
     
     constructor() {
+        this.receiver = new bolt.ExpressReceiver({
+            signingSecret: config.slack.signingSecret,
+            endpoints: "/api/slack-events"
+        });
         this.app = new bolt.App({
             token: config.slack.botToken,
-            signingSecret: config.slack.signingSecret,
-            socketMode: true,
+            receiver: this.receiver,
             appToken: config.slack.appToken
         });
         this.ai = getAIProvider();
         this.db = new LRUCache();
     }
 
-    async listen(): Promise<void> {
+    registerEvents(): void {
+
         this.app.event('app_mention', async ({ payload, event, body, say }) => {
             try {
+                logger.info('Received app_mention event:', payload);
                 await this.react('hourglass', payload.channel, payload.ts);
-
+                logger.info('Reacted with hourglass emoji');
                 const additionalData = {
                     user: payload.user,
                     type: payload.type,
@@ -37,21 +43,22 @@ export class SlackPlatform implements Platform {
                 };
 
                 const previousMessages = await this.db.getLastMessages(payload.thread_ts ?? payload.ts);
-
+                logger.info('Fetched previous messages from cache:', previousMessages);
                 const reply = await this.ai.generateReply(
                     "slack",
                     payload.text,
                     previousMessages,
                     JSON.stringify(additionalData)
                 );
-
+                logger.info('Generated AI reply:', reply);
                 await say({
                     text: reply,
                     thread_ts: payload.ts
                 });
 
                 await this.unreact('hourglass', payload.channel, payload.ts);
-
+                logger.info('Removed hourglass reaction');
+                
                 this.db.saveMessage(payload.thread_ts ?? payload.ts, { from: payload.user ?? 'user', text: payload.text });
                 this.db.saveMessage(payload.thread_ts ?? payload.ts, { from: 'bot', text: reply });
 
@@ -67,13 +74,10 @@ export class SlackPlatform implements Platform {
                 }
             }
         });
+    }
 
-        try {
-            await this.app.start();
-            logger.info('Slack listener initiated');
-        } catch (err) {
-            logger.error('Failed to start Slack app:', err);
-        }
+    getRequestHandler() {
+        return this.receiver.app;
     }
 
     async sendMessage(text: string, channelId: string): Promise<void> {
