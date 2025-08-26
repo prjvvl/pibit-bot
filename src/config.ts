@@ -14,5 +14,8 @@ export const config = {
     },
     provider: (process.env.LLM_PROVIDER === 'openai' || process.env.LLM_PROVIDER === 'gemini') ? process.env.LLM_PROVIDER : '',
     openaiKey: process.env.OPENAI_API_KEY,
-    geminiKey: process.env.GEMINI_API_KEY
+    geminiKey: process.env.GEMINI_API_KEY,
+    encryption: {
+        key: process.env.ENCRYPTION_KEY || '0123456789abcdef0123456789abcdef' // 32 bytes for AES-256
+    }
 }
