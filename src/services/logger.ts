@@ -2,13 +2,17 @@ type LogLevel = "info" | "warn" | "error" | "debug";
 
 const COLORS = {
   reset: "\x1b[0m",
-  info: "\x1b[36m",  // cyan
-  warn: "\x1b[33m",  // yellow
+  info: "\x1b[36m", // cyan
+  warn: "\x1b[33m", // yellow
   error: "\x1b[31m", // red
   debug: "\x1b[35m", // magenta
 };
 
-function formatMessage(level: LogLevel, message: string, meta?: unknown): string {
+function formatMessage(
+  level: LogLevel,
+  message: string,
+  meta?: unknown,
+): string {
   const timestamp = new Date().toISOString();
   const color = COLORS[level] || COLORS.reset;
   const metaString = meta ? ` | ${JSON.stringify(meta)}` : "";

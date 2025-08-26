@@ -1,5 +1,5 @@
 import bolt from "@slack/bolt";
-import { WebClient } from "@slack/web-api";
+import { WebClient, ErrorCode } from "@slack/web-api";
 import { config } from "../config.js";
 import { logger } from "../services/logger.js";
 import type { Platform } from "../core/platform/platformInterface.js";
@@ -8,6 +8,16 @@ import { getAIProvider } from "../core/ai/providerFactory.js";
 import { LRUCache } from "../services/database/cache.js";
 import { tokenStore } from "../services/database/tokens.js";
 
+class ApiError extends Error {
+  constructor(
+    message: string,
+    public originalError?: any,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 export class SlackPlatform implements Platform {
   private app: bolt.App;
   private receiver: bolt.ExpressReceiver;
@@ -15,6 +25,7 @@ export class SlackPlatform implements Platform {
   private db: LRUCache;
 
   constructor() {
+    logger.info("Initializing SlackPlatform...");
     this.receiver = new bolt.ExpressReceiver({
       signingSecret: config.slack.signingSecret,
       endpoints: "/api/slack-events",
@@ -24,7 +35,10 @@ export class SlackPlatform implements Platform {
       receiver: this.receiver,
       appToken: config.slack.appToken,
       authorize: async ({ teamId, enterpriseId }) => {
-        const tokenData = teamId ? await tokenStore.loadToken(teamId) : null;
+        if (!teamId) {
+          throw new Error("Team ID is missing");
+        }
+        const tokenData = await tokenStore.loadToken(teamId);
         if (!tokenData) {
           logger.error(`No token found for team ${teamId}`);
           throw new Error(`No token found for team ${teamId}`);
@@ -41,60 +55,51 @@ export class SlackPlatform implements Platform {
   }
 
   registerEvents(): void {
+    logger.info("Registering Slack event handlers...");
     this.app.event("app_mention", async ({ event, say }) => {
+      const { team, channel, ts, thread_ts, user, text } = event;
       try {
-        const teamId = event.team;
         logger.info("Received app_mention event:", event);
 
-        await this.react("hourglass", event.channel, event.ts, teamId);
+        await this.updateReaction("add", "hourglass", channel, ts, team);
         logger.info("Reacted with hourglass emoji");
 
-        const additionalData = {
-          user: event.user,
-          type: event.type,
-          ts: event.ts,
-          text: event.text,
-          team: teamId,
-        };
-
-        const previousMessages = await this.db.getLastMessages(
-          event.thread_ts ?? event.ts
-        );
+        const additionalData = { user, type: event.type, ts, text, team };
+        const previousMessages = await this.db.getLastMessages(thread_ts ?? ts);
         logger.info("Fetched previous messages from cache:", previousMessages);
 
         const reply = await this.ai.generateReply(
           "slack",
-          event.text,
+          text,
           previousMessages,
-          JSON.stringify(additionalData)
+          JSON.stringify(additionalData),
         );
         logger.info("Generated AI reply:", reply);
 
-        const client = await this.getClient(teamId ?? null);
+        const client = await this.getClient(team ?? null);
         await client.chat.postMessage({
           text: reply,
-          channel: event.channel,
-          thread_ts: event.ts,
+          channel: channel,
+          thread_ts: ts,
         });
 
-        await this.unreact("hourglass", event.channel, event.ts, teamId);
+        await this.updateReaction("remove", "hourglass", channel, ts, team);
         logger.info("Removed hourglass reaction");
 
-        this.db.saveMessage(event.thread_ts ?? event.ts, {
-          from: event.user ?? "user",
-          text: event.text,
-        });
-        this.db.saveMessage(event.thread_ts ?? event.ts, {
-          from: "bot",
-          text: reply,
-        });
+        this.db.saveMessage(thread_ts ?? ts, { from: user ?? "user", text });
+        this.db.saveMessage(thread_ts ?? ts, { from: "bot", text: reply });
       } catch (err) {
         logger.error("Failed to process Slack event:", err);
+        let errorMessage =
+          "Oops! Something went wrong while processing your message. Please try again later.";
+        if (err instanceof ApiError) {
+          errorMessage = `Error from Slack API: ${err.message}. Please check the bot's permissions and configuration.`;
+        } else if (err instanceof Error) {
+          errorMessage = `An unexpected error occurred: ${err.message}`;
+        }
+
         try {
-          await say({
-            text: "Oops! Something went wrong while processing your message. Please try again later.",
-            thread_ts: event.ts,
-          });
+          await say({ text: errorMessage, thread_ts: ts });
         } catch (notifyErr) {
           logger.error("Failed to notify user in Slack thread:", notifyErr);
         }
@@ -124,46 +129,33 @@ export class SlackPlatform implements Platform {
   async sendMessage(
     text: string,
     channelId: string,
-    teamId?: string
+    teamId?: string,
   ): Promise<void> {
     try {
       const client = teamId ? await this.getClient(teamId) : this.app.client;
       await client.chat.postMessage({ text, channel: channelId });
     } catch (err) {
       logger.error(`Failed to send message to channel ${channelId}:`, err);
+      throw new ApiError(`Could not send message to channel ${channelId}`, err);
     }
   }
 
-  private async react(
+  private async updateReaction(
+    action: "add" | "remove",
     emoji: string,
     channel: string,
     ts: string,
-    teamId?: string
+    teamId?: string,
   ): Promise<void> {
     try {
       const client = teamId ? await this.getClient(teamId) : this.app.client;
-      await client.reactions.add({ channel, name: emoji, timestamp: ts });
+      const method =
+        action === "add" ? client.reactions.add : client.reactions.remove;
+      await method({ channel, name: emoji, timestamp: ts });
     } catch (err) {
       logger.warn(
-        `Failed to add reaction :${emoji}: in channel ${channel}:`,
-        err
-      );
-    }
-  }
-
-  private async unreact(
-    emoji: string,
-    channel: string,
-    ts: string,
-    teamId?: string
-  ): Promise<void> {
-    try {
-      const client = teamId ? await this.getClient(teamId) : this.app.client;
-      await client.reactions.remove({ channel, name: emoji, timestamp: ts });
-    } catch (err) {
-      logger.warn(
-        `Failed to remove reaction :${emoji}: in channel ${channel}:`,
-        err
+        `Failed to ${action} reaction :${emoji}: in channel ${channel}:`,
+        err,
       );
     }
   }
