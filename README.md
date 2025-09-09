@@ -2,6 +2,8 @@
 
 A modular, AI-powered Slack bot built with TypeScript, supporting Gemini and OpenAI providers. Designed for extensibility, robust context management, and professional Slack integration.
 
+Demo - https://drive.google.com/file/d/1771qspjtOPYKPdUblrDI3Wqn-flGU-q4/view?usp=sharing
+
 ## Features
 
 - **Slack Integration:** Listens for mentions, replies in threads, reacts/unreacts to messages, and handles errors gracefully.
